@@ -1,0 +1,232 @@
+version: '3.8'
+
+# ==============================================================================
+# AI-Assisted Modern Enterprise NOC Platform - Master Docker Compose
+# ==============================================================================
+
+networks:
+  noc-public:
+    driver: bridge
+    name: noc-public-network
+  noc-telemetry:
+    driver: bridge
+    internal: false
+    name: noc-telemetry-network
+  noc-backend-net:
+    driver: bridge
+    internal: false
+    name: noc-backend-network
+
+volumes:
+  prometheus_data:
+    name: noc_prometheus_storage
+  alertmanager_data:
+    name: noc_alertmanager_storage
+  loki_data:
+    name: noc_loki_storage
+  grafana_data:
+    name: noc_grafana_storage
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. METRICS TSDB: Prometheus
+  # ----------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: noc-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../alerts:/etc/prometheus/alert_rules:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - noc-telemetry
+      - noc-public
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:9090/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ----------------------------------------------------------------------------
+  # 2. ALERT ROUTER: Prometheus Alertmanager
+  # ----------------------------------------------------------------------------
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: noc-alertmanager
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ../configs/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      - noc-telemetry
+      - noc-backend-net
+      - noc-public
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:9093/-/healthy || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ----------------------------------------------------------------------------
+  # 3. LOG STORAGE ENGINE: Grafana Loki
+  # ----------------------------------------------------------------------------
+  loki:
+    image: grafana/loki:2.9.5
+    container_name: noc-loki
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - ../configs/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - noc-telemetry
+      - noc-backend-net
+      - noc-public
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:3100/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # ----------------------------------------------------------------------------
+  # 4. LOG SHIPPER: Promtail
+  # ----------------------------------------------------------------------------
+  promtail:
+    image: grafana/promtail:2.9.5
+    container_name: noc-promtail
+    restart: unless-stopped
+    volumes:
+      - ../configs/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - ../logs:/var/log/noc:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - noc-telemetry
+    depends_on:
+      loki:
+        condition: service_healthy
+
+  # ----------------------------------------------------------------------------
+  # 5. SINGLE PANE OF GLASS: Grafana
+  # ----------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: noc-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-clock-panel
+    volumes:
+      - ../configs/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../configs/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../dashboard:/etc/grafana/provisioning/dashboards/json:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - noc-public
+      - noc-telemetry
+      - noc-backend-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+
+  # ----------------------------------------------------------------------------
+  # 6. HOST TELEMETRY: Node Exporter
+  # ----------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.7.0
+    container_name: noc-node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    networks:
+      - noc-telemetry
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:9100/metrics || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ----------------------------------------------------------------------------
+  # 7. SYNTHETIC PROBES: Blackbox Exporter
+  # ----------------------------------------------------------------------------
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.24.0
+    container_name: noc-blackbox-exporter
+    restart: unless-stopped
+    ports:
+      - "9115:9115"
+    volumes:
+      - ../configs/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
+    command:
+      - '--config.file=/etc/blackbox_exporter/config.yml'
+    networks:
+      - noc-telemetry
+      - noc-public
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 -O- http://localhost:9115/metrics || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ----------------------------------------------------------------------------
+  # 8. NOC ORCHESTRATION BACKEND: FastAPI & AI Engine
+  # ----------------------------------------------------------------------------
+  noc-backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: noc-orchestration-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ../.env
+    volumes:
+      - ../backend:/app/backend
+      - ../ai:/app/ai
+      - ../incidents:/app/incidents
+      - ../logs:/app/logs
+    networks:
+      - noc-backend-net
+      - noc-telemetry
+      - noc-public
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

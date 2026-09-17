@@ -1,0 +1,55 @@
+# ==========================================================
+# Alertmanager Core Configuration - Enterprise NOC Platform
+# ==========================================================
+
+global:
+  resolve_timeout: 5m
+
+# Route tree defining how alerts are grouped, throttled, and dispatched
+route:
+  receiver: 'noc-orchestrator'
+  group_by: ['alertname', 'cluster', 'service', 'tier', 'instance']
+  group_wait: 10s       # Wait 10s to bundle initial simultaneous alerts
+  group_interval: 30s   # Send updates for firing group every 30s
+  repeat_interval: 4h   # Do not re-notify identical unacknowledged alert for 4h
+
+  # Child routes for specialized routing
+  routes:
+    # High-priority alerts dispatch immediately with shorter group wait
+    - match:
+        severity: critical
+      receiver: 'noc-orchestrator-critical'
+      group_wait: 5s
+      repeat_interval: 1h
+
+# Inhibit rules to suppress redundant cascading alerts
+inhibit_rules:
+  # If the host is down (NodeDown), suppress all service/app-level alerts on that host
+  - source_match:
+      alertname: 'NodeDown'
+    target_match_re:
+      alertname: 'ServiceDown|HighCPUUsage|HighMemoryUsage|ProcessCrash'
+    equal: ['instance']
+
+  # If a network switch/gateway is down, suppress probe failures behind that gateway
+  - source_match:
+      alertname: 'NetworkGatewayUnreachable'
+    target_match_re:
+      alertname: 'BlackboxProbeHttpFailure|BlackboxProbeIcmpFailure'
+    equal: ['site']
+
+# Dispatch destinations
+receivers:
+  # Default receiver: FastAPI NOC Engine
+  - name: 'noc-orchestrator'
+    webhook_configs:
+      - url: 'http://noc-backend:8000/api/v1/alerts'
+        send_resolved: true
+        max_alerts: 50
+
+  # Critical receiver: FastAPI NOC Engine with high-priority flag
+  - name: 'noc-orchestrator-critical'
+    webhook_configs:
+      - url: 'http://noc-backend:8000/api/v1/alerts?priority=high'
+        send_resolved: true
+        max_alerts: 50

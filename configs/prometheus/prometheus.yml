@@ -1,0 +1,74 @@
+# ==========================================================
+# Prometheus Core Configuration - Enterprise NOC Platform
+# ==========================================================
+
+global:
+  scrape_interval: 15s     # Poll targets every 15 seconds
+  evaluation_interval: 15s # Evaluate alert rules every 15 seconds
+  scrape_timeout: 10s      # Abort scrape if target takes > 10s
+  external_labels:
+    site: 'primary-datacenter'
+    environment: 'production'
+    noc_region: 'us-east-1'
+
+# Alertmanager integration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+      scheme: http
+      timeout: 5s
+
+# Rule files containing threshold alerts and anomaly recording rules
+rule_files:
+  - "/etc/prometheus/alert_rules/*.yml"
+
+# Telemetry scrape targets
+scrape_configs:
+  # Self-monitoring of Prometheus server
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Host OS Telemetry (CPU, Memory, Disk, Network)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          tier: 'infrastructure'
+          host_type: 'linux-server'
+
+  # Alertmanager telemetry
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+
+  # Loki log storage engine metrics
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']
+
+  # NOC AI Orchestration Backend
+  - job_name: 'noc-backend'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['noc-backend:8000']
+        labels:
+          tier: 'orchestration'
+          service: 'fastapi-engine'
+
+  # Synthetic Network Probes (ICMP / HTTP / DNS / TCP)
+  - job_name: 'blackbox-http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://noc-backend:8000/health
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
