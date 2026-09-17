@@ -1,0 +1,30 @@
+# Virtual Environment
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment Secrets
+.env
+*.local.env
+
+# Storage & Databases
+*.db
+*.sqlite3
+data/
+prometheus_data/
+grafana_data/
+loki_data/
+
+# Logs
+*.log
+logs_storage/
+
+# OS / IDE
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
