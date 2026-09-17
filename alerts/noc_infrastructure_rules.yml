@@ -1,0 +1,112 @@
+# ==========================================================
+# Prometheus Alerting Rules: Core Infrastructure & NOC Health
+# ==========================================================
+
+groups:
+  - name: noc_infrastructure_alerts
+    interval: 15s
+    rules:
+      # ------------------------------------------------------------------------
+      # 1. Network Device Availability & Quality
+      # ------------------------------------------------------------------------
+      - alert: NetworkDeviceDown
+        expr: noc_device_status == 0
+        for: 30s
+        labels:
+          severity: critical
+          tier: network
+          category: availability
+        annotations:
+          summary: "Network device {{ $labels.device }} is DOWN"
+          description: "Device {{ $labels.device }} (Type: {{ $labels.type }}, Role: {{ $labels.role }}) has failed availability probes for > 30s."
+          runbook_url: "https://wiki.noc.local/runbooks/network-device-down"
+
+      - alert: NetworkHighLatency
+        expr: noc_network_latency_ms > 100
+        for: 1m
+        labels:
+          severity: warning
+          tier: network
+          category: performance
+        annotations:
+          summary: "High network latency on {{ $labels.target }}"
+          description: "Observed round-trip time of {{ $value }}ms on {{ $labels.target }} exceeds 100ms threshold."
+          runbook_url: "https://wiki.noc.local/runbooks/network-latency"
+
+      - alert: NetworkPacketLossHigh
+        expr: noc_network_packet_loss_percent > 5
+        for: 1m
+        labels:
+          severity: critical
+          tier: network
+          category: performance
+        annotations:
+          summary: "Severe packet loss on {{ $labels.target }}"
+          description: "Packet loss on {{ $labels.target }} is at {{ $value }}% (threshold: 5%)."
+          runbook_url: "https://wiki.noc.local/runbooks/packet-loss"
+
+      # ------------------------------------------------------------------------
+      # 2. Server Host Health (CPU, RAM, Disk)
+      # ------------------------------------------------------------------------
+      - alert: HostHighCpuLoad
+        expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 85
+        for: 2m
+        labels:
+          severity: high
+          tier: host
+          category: capacity
+        annotations:
+          summary: "High CPU utilization on {{ $labels.instance }}"
+          description: "Host CPU utilization is {{ printf \"%.2f\" $value }}% for over 2 minutes."
+          runbook_url: "https://wiki.noc.local/runbooks/host-high-cpu"
+
+      - alert: HostHighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 2m
+        labels:
+          severity: high
+          tier: host
+          category: capacity
+        annotations:
+          summary: "Memory pressure critical on {{ $labels.instance }}"
+          description: "Memory consumption exceeds 90% (current: {{ printf \"%.2f\" $value }}%)."
+          runbook_url: "https://wiki.noc.local/runbooks/host-memory-exhaustion"
+
+      - alert: HostDiskFillingUp
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+          tier: host
+          category: capacity
+        annotations:
+          summary: "Root filesystem disk space low on {{ $labels.instance }}"
+          description: "Available disk space is under 10% on root volume (current: {{ printf \"%.2f\" $value }}%)."
+          runbook_url: "https://wiki.noc.local/runbooks/disk-full"
+
+      # ------------------------------------------------------------------------
+      # 3. Application & Service Availability
+      # ------------------------------------------------------------------------
+      - alert: ApplicationProbeFailed
+        expr: probe_success == 0
+        for: 30s
+        labels:
+          severity: critical
+          tier: application
+          category: availability
+        annotations:
+          summary: "Synthetic HTTP healthcheck failed for {{ $labels.instance }}"
+          description: "Blackbox prober failed to receive HTTP 2xx from {{ $labels.instance }}."
+          runbook_url: "https://wiki.noc.local/runbooks/app-healthcheck-fail"
+
+      - alert: DatabaseConnectionPoolSaturated
+        expr: noc_db_connection_pool_utilization_percent > 85
+        for: 1m
+        labels:
+          severity: critical
+          tier: database
+          category: capacity
+        annotations:
+          summary: "Database connection pool saturated on {{ $labels.database }}"
+          description: "Active connections to {{ $labels.database }} at {{ $value }}% capacity."
+          runbook_url: "https://wiki.noc.local/runbooks/db-connection-pool"
